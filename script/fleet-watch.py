@@ -2792,12 +2792,16 @@ def issue_scan_has_acceptance(text):
 
 
 def issue_scan_brief_text(issue):
-    """The newest comment with acceptance criteria (the triage Agent Brief), else the body."""
+    """The newest comment with acceptance criteria (the triage Agent Brief), else the body.
+    A `Setup: none` line in the issue body is kept when the chosen comment lacks it."""
+    body = issue.get('body') or ''
     comments = [entry.get('body') or '' for entry in (issue.get('comments') or []) if isinstance(entry, dict)]
     for text in reversed(comments):
         if issue_scan_has_acceptance(text):
+            if re.search(r'^Setup: none', body, re.M) and not re.search(r'^Setup: none', text, re.M):
+                return text.rstrip() + '\n\nSetup: none'
             return text
-    return issue.get('body') or ''
+    return body
 
 
 def issue_scan_blocked(issue):
@@ -4635,10 +4639,27 @@ def _babysit_line(repo, number, head, action, detail=''):
     return text
 
 
+def pr_touches_no_package(pr_row, root):
+    """True when the PR has changed files and none sits in a folder with a package.json."""
+    paths = pr_file_paths(pr_row)
+    if not paths:
+        return False
+    for path in paths:
+        folder = Path(path).parent
+        while True:
+            if (Path(root) / folder / 'package.json').is_file():
+                return False
+            if folder == folder.parent:
+                break
+            folder = folder.parent
+    return True
+
+
 def build_babysit_spec(repo, pr_row, kind, builder, root, verdict_tag=''):
     number = pr_row['number']
     head = pr_row.get('headRefOid') or ''
     verify = checks_local_verify_text(root, 'bash script/checks-local.sh')
+    setup_line = '\nSetup: none' if pr_touches_no_package(pr_row, root) else ''
     if kind == 'verifier':
         if builder:
             who = 'The builder is agent=%s model=%s. Use a different agent and model.' % builder
@@ -4667,7 +4688,7 @@ def build_babysit_spec(repo, pr_row, kind, builder, root, verdict_tag=''):
             )
         extra_scope = ('\n\n%s' % scope_line) if scope_line else ''
         text = (
-            'Refs %s#%s\n\n'
+            'Refs %s#%s%s\n\n'
             'Role: qa-sdet. Verify this open PR at head %s the way a user would, '
             'and post the Verdict with script/post-verdict.sh. %s%s\n\n'
             '## Acceptance\n'
@@ -4678,11 +4699,11 @@ def build_babysit_spec(repo, pr_row, kind, builder, root, verdict_tag=''):
             '%s\n\n'
             '## Finish\n'
             'Self-review, run orca worktree set --worktree active --workspace-status in-review, then worker_done.\n'
-        ) % (repo, number, head, who, extra_scope, head, verify)
+        ) % (repo, number, setup_line, head, who, extra_scope, head, verify)
         return _write_issue_scan_spec(_with_preamble(text, 'qa-sdet'))
     else:
         text = (
-            'Refs %s#%s\n\n'
+            'Refs %s#%s%s\n\n'
             'Role: fullstack-dev. Fix this PR. head-checks failed at head %s.\n\n'
             '## Acceptance\n'
             '- [ ] head-checks pass for the new head\n\n'
@@ -4692,7 +4713,7 @@ def build_babysit_spec(repo, pr_row, kind, builder, root, verdict_tag=''):
             '%s\n\n'
             '## Finish\n'
             'Wait until gh pr checks <n> --watch --fail-fast (or gh run list --branch <branch> --limit 3) passes at the final head, run orca worktree set --worktree active --workspace-status in-review, then worker_done.\n'
-        ) % (repo, number, head, verify)
+        ) % (repo, number, setup_line, head, verify)
         return _write_issue_scan_spec(_with_preamble(text, 'fullstack-dev'))
 
 

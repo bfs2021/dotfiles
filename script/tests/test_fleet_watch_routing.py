@@ -229,11 +229,14 @@ class Preamble(unittest.TestCase):
 
 
 class Sticky(unittest.TestCase):
-    def pr(self, head=NEW, mergeable='MERGEABLE'):
+    def pr(self, head=NEW, mergeable='MERGEABLE', review='PASS'):
+        comments = []
+        if review:
+            comments.append({'body': 'Review: %s head=%s' % (review, head)})
         return {
             'number': 7, 'state': 'OPEN', 'isDraft': False, 'headRefOid': head, 'headRefName': 'b',
             'statusCheckRollup': [{'name': 'checks', 'conclusion': 'SUCCESS', 'status': 'COMPLETED'}],
-            'comments': [], 'labels': [], 'mergeable': mergeable,
+            'comments': comments, 'labels': [], 'mergeable': mergeable,
             'body': 'Builder: agent=claude model=opus',
         }
 
@@ -376,6 +379,126 @@ class Sticky(unittest.TestCase):
                 self.assertEqual(picks, [])
                 self.assertTrue(any('action=skip unknown-builder-family' in line for line in lines), lines)
                 self.assertIn('unknown_builder=7', log)
+
+    def test_verifier_waits_for_review_pass_and_review_fail_sends_back_with_no_verifier(self):
+        now = 1_700_000_000
+        with tempfile.TemporaryDirectory() as root:
+            config = {
+                'issue_scan': {'run': 'run_live', 'from_terminal': 'term_live', 'repo_roots': {REPO: root}},
+                'babysit': {'repos': [REPO], 'startup': '/bin/true'},
+            }
+            for review_status, expected_skip in ((None, 'pending'), ('FAIL', 'needs-fix')):
+                with self.subTest(review=review_status):
+                    starts = []
+                    _notices, lines, _log = fw.babysit_pass(
+                        config, {}, [],
+                        pr_fetch=lambda _repo, rs=review_status: [self.pr(review=rs)],
+                        runner_fetch=lambda _repo: {'runners': [
+                            {'status': 'online', 'labels': [{'name': 'review'}]},
+                        ]},
+                        start_worker=lambda command: starts.append(command) or 0,
+                        pick=lambda _role, avoid_family=None: {
+                            'selected': {'provider': 'cursor', 'model': 'grok-4.7-high', 'eligible': True},
+                        },
+                        owner_check=lambda _pr: None,
+                        now=now,
+                    )
+                    self.assertEqual(starts, [])
+                    self.assertTrue(any(('action=skip %s' % expected_skip) in line for line in lines), lines)
+            starts = []
+            _notices, lines, _log = fw.babysit_pass(
+                config, {}, [],
+                pr_fetch=lambda _repo: [self.pr(review='PASS')],
+                start_worker=lambda command: starts.append(command) or 0,
+                pick=lambda _role, avoid_family=None: {
+                    'selected': {'provider': 'cursor', 'model': 'grok-4.7-high', 'eligible': True},
+                },
+                owner_check=lambda _pr: None,
+                now=now,
+            )
+            self.assertEqual(len(starts), 1)
+            self.assertTrue(any('action=verifier' in line for line in lines), lines)
+
+    def review_gate_pass(self, runners):
+        """One babysit pass on a green PR with no Review receipt; returns (starts, lines, log, fetches)."""
+        fetches = []
+
+        def runner_fetch(repo):
+            fetches.append(repo)
+            if isinstance(runners, Exception):
+                raise runners
+            return runners
+
+        starts = []
+        with tempfile.TemporaryDirectory() as root:
+            config = {
+                'issue_scan': {'run': 'run_live', 'from_terminal': 'term_live', 'repo_roots': {REPO: root}},
+                'babysit': {'repos': [REPO], 'startup': '/bin/true'},
+            }
+            _notices, lines, log = fw.babysit_pass(
+                config, {}, [],
+                pr_fetch=lambda _repo: [self.pr(review=None), dict(self.pr(review=None), number=8)],
+                start_worker=lambda command: starts.append(command) or 0,
+                pick=lambda _role, avoid_family=None: {
+                    'selected': {'provider': 'cursor', 'model': 'grok-4.7-high', 'eligible': True},
+                },
+                owner_check=lambda _pr: None,
+                runner_fetch=runner_fetch,
+                now=1_700_000_000,
+            )
+        return starts, lines, log, fetches
+
+    def test_repo_with_no_online_review_runner_falls_back_to_green_checks(self):
+        offline = {'total_count': 1, 'runners': [
+            {'status': 'offline', 'labels': [{'name': 'self-hosted'}, {'name': 'review'}]},
+            {'status': 'online', 'labels': [{'name': 'self-hosted'}, {'name': 'build'}]},
+        ]}
+        for runners in ({'total_count': 0, 'runners': []}, offline):
+            with self.subTest(runners=runners):
+                starts, lines, log, fetches = self.review_gate_pass(runners)
+                self.assertTrue(starts, lines)
+                self.assertTrue(any('action=verifier' in line for line in lines), lines)
+                self.assertEqual(log.count('review_gate_no_runner_%s' % REPO), 1, log)
+                self.assertEqual(fetches, [REPO])
+
+    def test_repo_with_online_review_runner_still_waits_for_review_pass(self):
+        runners = {'total_count': 1, 'runners': [
+            {'status': 'online', 'labels': [{'name': 'self-hosted'}, {'name': 'review'}]},
+        ]}
+        starts, lines, log, _fetches = self.review_gate_pass(runners)
+        self.assertEqual(starts, [])
+        self.assertTrue(any('action=skip pending' in line for line in lines), lines)
+        self.assertNotIn('review_gate_no_runner', str(log))
+
+    def test_runner_api_error_keeps_waiting_and_logs_it(self):
+        for runners in (RuntimeError('boom'), None):
+            with self.subTest(runners=runners):
+                starts, lines, log, _fetches = self.review_gate_pass(runners)
+                self.assertEqual(starts, [])
+                self.assertTrue(any('action=skip pending' in line for line in lines), lines)
+                self.assertEqual(log.count('review_gate_runner_error_%s' % REPO), 1, log)
+                self.assertNotIn('review_gate_no_runner', str(log))
+
+    def test_reverify_after_fix_briefs_only_prior_fail_items_and_diff_since_last_verified_head(self):
+        now = 1_700_000_000
+        pr = self.pr(head=NEW, review='PASS')
+        pr['comments'].insert(0, {
+            'body': 'Verdict: FAIL head=%s verifier=ctx_v author=ctx_a\n- button click fails\n- missing aria label' % HEAD,
+            'createdAt': '2026-11-14T10:00:00Z',
+        })
+        with tempfile.TemporaryDirectory() as root:
+            spec_path = fw.build_babysit_spec(REPO, pr, 'verifier', ('claude', 'opus'), root)
+            spec_text = Path(spec_path).read_text(encoding='utf-8')
+            self.assertIn('%s..%s' % (HEAD, NEW), spec_text)
+            self.assertIn('button click fails', spec_text)
+            self.assertIn('missing aria label', spec_text)
+            self.assertIn('prior FAIL items', spec_text)
+            state = {'verifier_head': {REPO: {'7': HEAD}}}
+            notes, released, starts = self.run_pass(pr, state, now, now - 10)
+            self.assertEqual(starts, [])
+            self.assertEqual(released, [])
+            self.assertIn('%s..%s' % (HEAD, NEW), notes[0][1])
+            self.assertIn('prior FAIL items', notes[0][1])
 
 
 class Bounce(unittest.TestCase):

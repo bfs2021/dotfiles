@@ -3663,6 +3663,63 @@ def verdict_posted_for_head(pr):
     return False
 
 
+def review_passed_at_head(pr):
+    """True when the newest Review receipt for this head is PASS."""
+    head = pr.get('headRefOid') or ''
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        return False
+    return rs.newest_receipt_kind(pr.get('comments') or [], 'Review', head) == 'PASS'
+
+
+def fetch_actions_runners(repo):
+    """Runner list for a repo from the Actions API, or None when the call fails."""
+    try:
+        proc = subprocess.run(
+            ['gh', 'api', 'repos/%s/actions/runners' % repo],
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        return json.loads(proc.stdout)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+
+
+def has_online_review_runner(data):
+    """True when the runner list holds an online runner carrying the review label."""
+    runners = data.get('runners') if isinstance(data, dict) else None
+    if not isinstance(runners, list):
+        raise ValueError('no runner list')
+    return any(
+        isinstance(r, dict) and r.get('status') == 'online'
+        and any(isinstance(l, dict) and l.get('name') == 'review' for l in r.get('labels') or [])
+        for r in runners
+    )
+
+
+def prior_verdict_fail(pr):
+    """(verified_head, findings_body) from the newest prior Verdict: FAIL on an earlier head, or None."""
+    head = pr.get('headRefOid') or ''
+    comments = sorted(
+        [(idx, c) for idx, c in enumerate(pr.get('comments') or []) if isinstance(c, dict)],
+        key=lambda pair: (pair[1].get('createdAt') or '', pair[0]), reverse=True,
+    )
+    for _, comment in comments:
+        body = comment.get('body') or ''
+        first = _receipt_first_line(body)
+        match = _VERDICT_FOR_HEAD_RE.match(first)
+        if not match:
+            continue
+        verdict_head = match.group('head')
+        if verdict_head == head:
+            continue
+        if first.startswith('Verdict: FAIL '):
+            rest = '\n'.join(body.splitlines()[1:]).strip()
+            return verdict_head, rest[:4000]
+        return None
+    return None
+
+
 def pr_file_paths(pr):
     paths = []
     for item in pr.get('files') or []:
@@ -4318,8 +4375,8 @@ def route_rework_head(pr, workers, state, repo, now, term_times, release, notify
             return 'released'
         notify(
             worker_terminal_handle(worker),
-            'Rework head %s is on %s#%s. Recheck only your fix list and the brief search command.'
-            % (head, repo, number),
+            'Rework head %s is on %s#%s. Check only the prior FAIL items and git diff %s..%s (the diff since the last verified head).'
+            % (head, repo, number, tracked, head),
         )
         bucket[str(number)] = head
         return 'sticky'
@@ -4514,14 +4571,30 @@ def build_babysit_spec(repo, pr_row, kind, builder, root, verdict_tag=''):
             who = 'The builder agent and model were not recorded.'
         if verdict_tag:
             who += ' No other family has quota. Tag the Verdict %s.' % verdict_tag
-        verify = (
-            'GitHub Checks are green at head %s. Review the diff and run the live checks this brief names.'
-            % head
-        )
+        prior_fail = prior_verdict_fail(pr_row)
+        if prior_fail:
+            last_head, findings = prior_fail
+            scope_line = (
+                'Re-verify after a fix: check only the prior FAIL items and the diff since the last verified head '
+                '(git diff %s..%s).' % (last_head, head)
+            )
+            if findings:
+                scope_line += '\n\nPrior FAIL items from head %s:\n%s' % (last_head, findings)
+            verify = (
+                'GitHub Checks and Review are green at head %s. Check only the prior FAIL items and git diff %s..%s.'
+                % (head, last_head, head)
+            )
+        else:
+            scope_line = ''
+            verify = (
+                'GitHub Checks are green at head %s. Review the diff and run the live checks this brief names.'
+                % head
+            )
+        extra_scope = ('\n\n%s' % scope_line) if scope_line else ''
         text = (
             'Refs %s#%s\n\n'
             'Role: qa-sdet. Verify this open PR at head %s the way a user would, '
-            'and post the Verdict with script/post-verdict.sh. %s\n\n'
+            'and post the Verdict with script/post-verdict.sh. %s%s\n\n'
             '## Acceptance\n'
             '- [ ] a Verdict for head %s is posted\n\n'
             '## Out of scope\n'
@@ -4530,7 +4603,7 @@ def build_babysit_spec(repo, pr_row, kind, builder, root, verdict_tag=''):
             '%s\n\n'
             '## Finish\n'
             'Self-review, run orca worktree set --worktree active --workspace-status in-review, then worker_done.\n'
-        ) % (repo, number, head, who, head, verify)
+        ) % (repo, number, head, who, extra_scope, head, verify)
         return _write_issue_scan_spec(_with_preamble(text, 'qa-sdet'))
     else:
         text = (
@@ -4861,7 +4934,7 @@ def babysit_pass(
     config, state, workers=None, dry_run=False, persist_state=None,
     pr_fetch=None, start_worker=None, pick=None, owner_check=None,
     release_worker=None, notify_worker=None, now=None, term_times=None,
-    closed_fetch=None,
+    closed_fetch=None, runner_fetch=None,
 ):
     """One verifier or one fixer per open PR head. Drafts are skipped. Cap defaults to 2."""
     notices = []
@@ -4889,10 +4962,29 @@ def babysit_pass(
     if closed_fetch is None:
         # The open list drops a pull request the moment it merges. The full list is how a live verifier is released.
         closed_fetch = fetch_prs if pr_fetch is fetch_open_prs else (lambda _repo: None)
+    if runner_fetch is None:
+        runner_fetch = fetch_actions_runners
     _startup, run_id, from_terminal, roots = babysit_settings(config)
     cap = babysit_cap(config)
     started = 0
     picks = {}
+    runner_state = {}
+
+    def review_gate_open(pr_row, repo_name):
+        """Review: PASS at head, or the repo has no online review runner (one API call per repo per pass)."""
+        if review_passed_at_head(pr_row):
+            return True
+        if repo_name not in runner_state:
+            try:
+                data = runner_fetch(repo_name)
+                runner_state[repo_name] = 'online' if has_online_review_runner(data) else 'none'
+            except Exception:
+                runner_state[repo_name] = 'error'
+            if runner_state[repo_name] == 'none':
+                log_bits.append('review_gate_no_runner_%s' % repo_name)
+            elif runner_state[repo_name] == 'error':
+                log_bits.append('review_gate_runner_error_%s' % repo_name)
+        return runner_state[repo_name] == 'none'
 
     def cached_pick(role, avoid_family=None):
         key = (role, avoid_family or '')
@@ -4989,7 +5081,8 @@ def babysit_pass(
             and pr_checks_all_success(pr_row)
             and pr_verdict_valid_for_head(pr_row, repo_root=repo_root)
         )
-        if status == 'SUCCESS' and not verdict_posted_for_head(pr_row) and not needs_fix:
+        if (status == 'SUCCESS' and not verdict_posted_for_head(pr_row) and not needs_fix
+                and review_gate_open(pr_row, repo)):
             kind, role = 'verifier', 'qa-sdet'
         elif needs_fix:
             if release_idle_rework_verifier(

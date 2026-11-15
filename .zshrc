@@ -22,6 +22,7 @@ if type brew &>/dev/null; then
   FPATH=$(brew --prefix)/share/zsh-completions:$FPATH
 fi
 
+fpath=(~/.grok/completions/zsh $fpath)
 autoload -Uz compinit
 compinit
 
@@ -81,6 +82,4 @@ export PATH="$HOME/.stripe/bin:$PATH"
 
 # >>> grok installer >>>
 export PATH="$HOME/.grok/bin:$PATH"
-fpath=(~/.grok/completions/zsh $fpath)
-autoload -Uz compinit && compinit -C
 # <<< grok installer <<<

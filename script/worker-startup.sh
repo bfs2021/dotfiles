@@ -656,7 +656,11 @@ run_mode() {
     fi
     create_args=(--name "$name" --repo "$repo_selector")
     [ -z "$base" ] || create_args+=(--base-branch "$base")
-    create_args+=(--setup run --json)
+    # `Setup: none` briefs never run bun/node: skip the install hook, keep the fresh-main fast-forward.
+    # A remote host has no exec path here, so it keeps --setup run.
+    setup_mode=run
+    if [ -z "$environment" ] && grep -q '^Setup: none' "$spec"; then setup_mode=skip; fi
+    create_args+=(--setup "$setup_mode" --json)
     [ -z "$environment" ] || create_args+=(--environment "$environment")
     result=$("$orca" worktree create "${create_args[@]}") || {
       status=$?
@@ -669,6 +673,9 @@ run_mode() {
     wt="${wt%"${wt##*[![:space:]]}"}"
   fi
   case "$wt" in /*) ;; *) die "worktree path must be absolute" ;; esac
+  if [ "${setup_mode:-}" = skip ]; then
+    (cd "$wt" && bash "$here/worktree-setup.sh" --git-only) || die "git-only setup failed in $wt"
+  fi
 
   local brief
   brief=$(cat "$spec")

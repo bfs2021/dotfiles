@@ -68,6 +68,20 @@ PROMOTE_RULES: dict[str, dict] = {
 }
 ROLLBACK_SCRIPTS: set[str] = {"rollback-production.sh"}
 APPLY_SCRIPTS: set[str] = {"apply-production-sql.sh", "set-production-secret.sh", "run-production-data-step.sh"}
+# The one apply script that skips the approval before the go-live date (UTC, ISO) in guard-config.json
+# `pre_go_live_secrets.until`. The script itself refuses to overwrite an existing key.
+PRE_GO_LIVE_SCRIPT = "set-production-secret.sh"
+PRE_GO_LIVE_UNTIL: str | None = None
+
+
+def pre_go_live_command(script_args):
+    """Only `<sha> --host prod-1 STORE_DOCUMENTS_<NAME>` or a `--copy-to-standby` run skips the approval."""
+    rest = script_args[1:]
+    if "--copy-to-standby" in rest:
+        return True
+    if rest[:2] != ["--host", "prod-1"]:
+        return False
+    return len(rest) == 3 and re.fullmatch(r"STORE_DOCUMENTS_[A-Z0-9_]+", rest[2]) is not None
 SCHEMA_OVERRIDE: str = "SCHEMA_APPROVED"
 APPROVAL_NAMESPACE: str = ""
 APPROVAL_FILE_OVERRIDE: str = ""
@@ -216,7 +230,7 @@ def load_guard_config(start_dir):
     global APPLY_SCRIPTS, SCHEMA_OVERRIDE, APPROVAL_NAMESPACE, APPROVAL_FILE_OVERRIDE
     global SIGN_IN_SCRIPT, SECRETS_STDIN_OK, WORKTREE_ENV_ALLOW, SECRETS_DIR, SECRETS_WRITE_REDIRECT
     global CONFIG_LOADED_FROM, HOST_DEPLOY_PATTERNS, REMOTE_READ_ONLY, SECRETS_DIR_EXCEPTIONS, FORCE_PUSH_BRANCHES
-    global EXACT_ONLY_SCRIPTS, SECRETS_DIR_RELPATHS, GRILL_APPROVERS, PROMOTE_STEPS
+    global EXACT_ONLY_SCRIPTS, SECRETS_DIR_RELPATHS, GRILL_APPROVERS, PROMOTE_STEPS, PRE_GO_LIVE_UNTIL
 
     BLOCKED_SCRIPTS = set()
     GRILL_APPROVERS = set()
@@ -231,6 +245,7 @@ def load_guard_config(start_dir):
     }
     ROLLBACK_SCRIPTS = {"rollback-production.sh"}
     APPLY_SCRIPTS = {"apply-production-sql.sh", "set-production-secret.sh", "run-production-data-step.sh"}
+    PRE_GO_LIVE_UNTIL = None
     SCHEMA_OVERRIDE = "SCHEMA_APPROVED"
     APPROVAL_NAMESPACE = ""
     APPROVAL_FILE_OVERRIDE = os.environ.get("GUARD_APPROVAL_FILE") or ""
@@ -338,6 +353,11 @@ def load_guard_config(start_dir):
     for item in cfg_expect("apply_scripts", list, "list") or []:
         if isinstance(item, str) and item.strip():
             APPLY_SCRIPTS.add(os.path.basename(item.strip()))
+
+    raw_go_live = cfg_expect("pre_go_live_secrets", dict, "object")
+    until = (raw_go_live or {}).get("until")
+    if isinstance(until, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", until):
+        PRE_GO_LIVE_UNTIL = until
 
     raw_schema = cfg_expect("schema_override", str, "string")
     if raw_schema and raw_schema.strip():
@@ -2080,7 +2100,10 @@ def check_risky(segment, base, args, depth, segment_cwd=None):
         script = os.path.basename(args[idx]) if idx is not None and "-n" not in args else ""
         script_args = args[idx + 1:] if idx is not None else []
 
-    if script in APPLY_SCRIPTS:
+    pre_go_live = (script == PRE_GO_LIVE_SCRIPT and PRE_GO_LIVE_UNTIL is not None
+                   and time.strftime("%Y-%m-%d", time.gmtime()) < PRE_GO_LIVE_UNTIL
+                   and pre_go_live_command(script_args))
+    if script in APPLY_SCRIPTS and not pre_go_live:
         sha = script_args[0] if script_args else "<sha>"
         a, why = load_approval()
         ok = (re.fullmatch(r"[0-9a-f]{40}", sha) and a and a.get("scope") == "promote" and a.get("target") == sha

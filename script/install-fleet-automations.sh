@@ -153,7 +153,6 @@ automation_wrap() {
     printf ' %q' "$1"
     shift
   done
-  printf '; exit 1'
 }
 
 fleet_watch_precheck() {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Orca fleet automation precheck wrapper: one traceable start and end line per run.
 # Usage: automation-precheck-wrapper.sh <name> <log-path> -- <command...>
+# Exit code: 1 = job succeeded (Orca skips the agent run), 3 = job failed. Summary goes to stdout/stderr.
 set -uo pipefail
 name=${1:?automation name}
 log=${2:?log path}
@@ -118,6 +119,12 @@ PY
   }
 
   trace_emit "phase=end exit=$inner_rc duration=${duration}s summary=$summary"
+  # Orca records the precheck output on the run entry. Good runs print to stdout, failed runs to stderr.
+  if [ "$inner_rc" -eq 0 ]; then
+    printf 'OK %s duration=%ss: %s\n' "$name" "$duration" "$summary"
+  else
+    printf 'FAILED %s exit=%s duration=%ss: %s\n' "$name" "$inner_rc" "$duration" "$summary" >&2
+  fi
   rm -f "$summary_file"
 }
 
@@ -149,4 +156,7 @@ wait "$child_pid"
 inner_rc=$?
 child_pid=""
 finish_trace
-exit 1
+# Orca skips the run on any nonzero exit. 1 means the job ran fine, 3 means it failed, so the
+# run history tells them apart ("exited with code 1" vs "code 3").
+[ "$inner_rc" -eq 0 ] && exit 1
+exit 3

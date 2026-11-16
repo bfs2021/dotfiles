@@ -15,7 +15,7 @@ line_count() { [ -f "$log" ] && wc -l <"$log" | tr -d ' ' || echo 0; }
 : >"$log"
 WRAP_UP_SCHEDULED_LOG="$log" bash "$wrapper" test-fail "$log" -- false
 rc=$?
-check 'wrapper exits 1 for Orca precheck contract' test "$rc" -eq 1
+check 'wrapper exits 3 when the job failed' test "$rc" -eq 3
 check 'failed run has a start line' grep -q 'phase=start' "$log"
 check 'failed run has an end line' grep -q 'phase=end exit=1' "$log"
 check 'failed run end names exit code' grep -q 'summary=failed inner exit 1' "$log"
@@ -81,7 +81,8 @@ sleep 3
 EOS
 chmod +x "$tmp/hang-int.sh"
 set -m
-bash "$wrapper" test-int "$log" -- bash "$tmp/hang-int.sh" "$tmp/int.ready" &
+# A parallel test runner leaves SIGINT ignored; bash cannot trap a signal ignored at entry, so reset it.
+perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV' -- bash "$wrapper" test-int "$log" -- bash "$tmp/hang-int.sh" "$tmp/int.ready" &
 wpid=$!
 set +m
 i=0

@@ -1,0 +1,1 @@
+Orca automation run history now shows each script job's summary. The precheck wrapper prints `OK <name> ...` to stdout or `FAILED <name> ...` to stderr, and exits 1 when the job ran fine or 3 when it failed, so the two no longer look the same.

@@ -208,7 +208,7 @@ for a in d["automations"]:
 ')
 echo "$fleet_pc" | grep -q 'automation-precheck-wrapper.sh' && check 'fleet precheck uses trace wrapper' true || check 'fleet precheck uses trace wrapper' false
 echo "$fleet_pc" | grep -q 'fleet-watch.py' && check 'fleet precheck runs fleet-watch.py' true || check 'fleet precheck runs fleet-watch.py' false
-echo "$fleet_pc" | grep -q 'exit 1' && check 'fleet precheck ends with exit 1' true || check 'fleet precheck ends with exit 1' false
+echo "$fleet_pc" | grep -q '; exit 1' && check 'fleet precheck keeps the wrapper exit code' false || check 'fleet precheck keeps the wrapper exit code' true
 echo "$fleet_pc" | grep -q "$FLEET_WATCH_CONFIG" && check 'fleet precheck uses env config path' true || check 'fleet precheck uses env config path' false
 echo "$fleet_pc" | grep -q '\*/5 \* \* \* \*' && check 'fleet-watch schedule is 5 min' true || check 'fleet-watch schedule is 5 min' false
 echo "$fleet_pc" | grep -q '^280$' && check 'fleet-watch timeout 280' true || check 'fleet-watch timeout 280' false
@@ -310,7 +310,7 @@ for a in d["automations"]:
 ')
 echo "$staging_pc" | grep -q 'automation-precheck-wrapper.sh' && check 'daily-program-1900 precheck uses trace wrapper' true || check 'daily-program-1900 precheck uses trace wrapper' false
 echo "$staging_pc" | grep -q 'automation-precheck-staging-daily.sh' && check 'daily-program-1900 precheck runs automation-precheck-staging-daily.sh' true || check 'daily-program-1900 precheck runs automation-precheck-staging-daily.sh' false
-echo "$staging_pc" | grep -q 'exit 1' && check 'daily-program-1900 precheck ends with exit 1' true || check 'daily-program-1900 precheck ends with exit 1' false
+echo "$staging_pc" | grep -q '; exit 1' && check 'daily-program-1900 precheck keeps the wrapper exit code' false || check 'daily-program-1900 precheck keeps the wrapper exit code' true
 echo "$staging_pc" | grep -q '^0 19 \* \* \*$' && check 'daily-program-1900 schedule is 0 19 * * *' true || check 'daily-program-1900 schedule is 0 19 * * *' false
 echo "$staging_pc" | grep -q '^Asia/Taipei$' && check 'daily-program-1900 timezone defaults to Asia/Taipei' true || check 'daily-program-1900 timezone defaults to Asia/Taipei' false
 

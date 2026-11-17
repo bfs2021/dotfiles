@@ -1,0 +1,1 @@
+worker-startup refuses a fullstack-dev brief whose Refs issue a merged PR already closed (Closes, Fixes, Resolves, Delivers), unless --allow-delivered REASON is given. A failed gh lookup lets the start go on (#1158).

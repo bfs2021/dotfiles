@@ -5,12 +5,14 @@
 #   worker-startup.sh --host-check
 #   worker-startup.sh --pick-host-only --spec FILE
 #   worker-startup.sh --run ID --spec FILE --title TEXT --agent NAME --model ID [--from HANDLE] [--on ENV]
-#         [--route-override REASON]
+#         [--route-override REASON] [--allow-delivered REASON]
 #         (--worktree-path PATH | --name NAME --repo SELECTOR [--base-branch REF])
 # A fullstack-dev or light-tier title ("<role> - <job>") started on antigravity, grok or cursor is refused
 # while usage-gate.py pick still returns claude (provider priority: claude, antigravity, grok, cursor).
 # --on ENV over its load limit, or naming the coordinator host, exits 4 unless --force-host REASON
 # is given (the coordinator host accepts only chrome-dev, line-desktop or host-file).
+# A fullstack-dev brief whose Refs issue a merged PR already closed (Closes, Fixes, Resolves, Delivers) is refused
+# unless --allow-delivered REASON is given (#1158).
 # --route-override REASON logs the reason and allows that start. --agent grok --on ENV needs ENV listed under
 # grok_hosts in the fleet config (the hosts that have the Grok CLI).
 set -euo pipefail
@@ -518,6 +520,33 @@ refuse_merged_backlog_line() { # <spec_file> <title>
   [ -z "$merged" ] || die "refused: $key already merged in PR #$merged; check the backlog before building it again"
 }
 
+# A builder brief whose Refs issue a merged PR already closed is refused (#1158). A failed gh call lets the start go on.
+refuse_delivered_issue() { # <spec_file> <title> <allow_reason>
+  local spec_file=$1 title=$2 allow=$3 role kind ref repo num prs btype
+  role=$(role_from_title "$title")
+  [ -n "$role" ] || return 0
+  kind=$(role_class "$role") || return 0
+  [ "$kind" = builder ] || return 0
+  btype=$(sed -n 's/^Type:[[:space:]]*//p' "$spec_file" | head -1)
+  case "$btype" in rework|verify) return 0 ;; esac
+  ref=$(grep -m1 -oE '^Refs ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+' "$spec_file" | sed 's/^Refs //' || true)
+  [ -n "$ref" ] || return 0
+  num=${ref##*#}
+  repo=${ref%%#*}
+  command -v gh >/dev/null 2>&1 || return 0
+  prs=$(gh pr list ${repo:+-R "$repo"} --state merged --search "$num in:body" --limit 30 --json number,body \
+    --jq "[.[] | select(.body // \"\" | test(\"(?i)(closes|fixes|resolves|delivers)\\\\s+([A-Za-z0-9_./-]+)?#$num\\\\b\")) | .number] | map(\"#\" + tostring) | join(\", \")" 2>/dev/null) || {
+    echo "worker-startup: delivered-issue check skipped: gh failed" >&2
+    return 0
+  }
+  [ -n "$prs" ] || return 0
+  if [ -n "$allow" ]; then
+    echo "worker-startup: --allow-delivered: $ref already delivered by $prs ($allow)" >&2
+    return 0
+  fi
+  die "refused: $ref already delivered by merged PR $prs; close the issue, or pass --allow-delivered REASON"
+}
+
 enforce_builder_provider() { # <title> <agent> <override>
   local title=$1 agent=$2 override=$3 role kind pick_py pick_out pick_err flags
   [ "$agent" != claude ] || return 0
@@ -555,10 +584,10 @@ require_grok_host() { # <environment>
 run_mode() {
   local run='' spec='' title='' agent='' model='' environment='' from=${ORCA_TERMINAL_HANDLE:-}
   local wt='' worktree_sel='' name='' repo='' base='' task='' retry_of='' route_override='' start_out=''
-  local explicit_on=0 force_host='' on_raw=''
+  local explicit_on=0 force_host='' on_raw='' allow_delivered=''
   while [ $# -gt 0 ]; do
     case "$1" in
-      --run|--spec|--title|--agent|--model|--from|--on|--worktree-path|--worktree|--name|--repo|--base-branch|--task|--retry-of|--route-override|--force-host)
+      --run|--spec|--title|--agent|--model|--from|--on|--worktree-path|--worktree|--name|--repo|--base-branch|--task|--retry-of|--route-override|--force-host|--allow-delivered)
         [ $# -ge 2 ] || usage_run
         case "$1" in
           --run) run=$2 ;;
@@ -577,6 +606,7 @@ run_mode() {
           --retry-of) retry_of=$2 ;;
           --route-override) route_override=$2; [ -n "$route_override" ] || die "route override needs a reason" ;;
           --force-host) force_host=$2; [ -n "$force_host" ] || die "force-host needs a reason" ;;
+          --allow-delivered) allow_delivered=$2; [ -n "$allow_delivered" ] || die "allow-delivered needs a reason" ;;
         esac
         shift 2 ;;
       *) usage_run ;;
@@ -620,6 +650,7 @@ run_mode() {
   [ -n "$(tr -d '[:space:]' <"$spec" || true)" ] || die "spec file is empty: $spec"
   local lint_out dispatch_log
   refuse_merged_backlog_line "$spec" "$title"
+  refuse_delivered_issue "$spec" "$title" "$allow_delivered"
   spec=$(with_finish_block "$spec" "$run" "$agent" "$model")
   spec=$(prepend_role_preamble "$spec" "$title")
   lint_out=$(bash "$here/brief-lint.sh" "$spec" 2>&1) || die "$lint_out"

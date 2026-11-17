@@ -774,6 +774,16 @@ def classify_worker(worker, proof=None, config=None, env_names=None):
                 'evidence': {'status': status, 'pushed': pushed, 'released': True}
             }
             return False, info, False
+        elif not worker_exit_still_holds_seat(worker):
+            # Settled with no owned resource and nothing unpushed: only a row, not a seat (#1155).
+            info = {
+                'dispatchId': dispatch_id,
+                'host': host,
+                'category': 'freed',
+                'role': role,
+                'evidence': {'status': status, 'pushed': pushed, 'released': False, 'no_seat_evidence': True}
+            }
+            return False, info, False
         else:
             info = {
                 'dispatchId': dispatch_id,

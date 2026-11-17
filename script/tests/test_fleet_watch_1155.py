@@ -1,5 +1,7 @@
 import importlib.util
 import os
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -56,6 +58,48 @@ class SettledRowsHoldNoSeat(unittest.TestCase):
         self.assertFalse(receipt['admitted'])
         self.assertEqual(receipt['occupied'], 5)
         self.assertEqual(receipt['overflow_host'], 'niteking')
+
+
+def retained_user_requested_row(i, path='/Users/x/orca/workspaces/repo/gone-%d'):
+    """Live mini6 shape: succeeded, terminal retained by user request, owned resource, not live, worktree gone."""
+    path = path % i if '%d' in path else path
+    return {
+        'dispatchId': 'ctx_ret_%d' % i, 'taskId': 'task_r%d' % i,
+        'workerState': 'succeeded', 'dispatchStatus': 'completed', 'terminalState': 'retained',
+        'resource': {'id': 'wtr_%d' % i, 'ownershipState': 'owned', 'releaseState': 'retained',
+                     'retainedReason': 'user_requested', 'worktreeId': 'wt::' + path},
+        'projection': {'host': {'kind': 'local', 'id': 'local'}, 'workspace': {'id': 'wt::' + path},
+                       'liveness': {'verdict': 'unverifiable', 'reason': 'missing_status'},
+                       'resource': {'state': 'owned'}},
+    }
+
+
+class RetainedRowsHoldSeatOnlyWhileLive(unittest.TestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, {'FLEET_WATCH_TEST_LOAD_PER_CORE': '0.10', 'FLEET_WATCH_TEST_FREE_GB': '16.0'})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_33_user_requested_retained_gone_worktrees_hold_no_seat(self):
+        workers = [retained_user_requested_row(i) for i in range(33)] + [live_row()]
+        receipt = fw.admit('local', CONFIG, workers=workers)
+        self.assertTrue(receipt['admitted'], receipt['reason'])
+        self.assertEqual(receipt['occupied'], 1)
+
+    def test_retained_row_with_dirty_worktree_keeps_seat(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'a', 'b', 'wt')
+            os.makedirs(path)
+            subprocess.check_call(['git', '-C', path, 'init', '-q', '-b', 'main'])
+            with open(os.path.join(path, 'x'), 'w') as handle:
+                handle.write('x')
+            receipt = fw.admit('local', CONFIG, workers=[retained_user_requested_row(0, path)])
+            self.assertEqual(receipt['occupied'], 1)
+
+    def test_retained_row_with_live_terminal_keeps_seat(self):
+        row = retained_user_requested_row(0)
+        row['projection']['liveness'] = {'verdict': 'live'}
+        self.assertEqual(fw.admit('local', CONFIG, workers=[row])['occupied'], 1)
 
 
 if __name__ == '__main__':

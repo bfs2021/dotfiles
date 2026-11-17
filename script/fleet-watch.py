@@ -647,6 +647,19 @@ def worker_exit_still_holds_seat(worker):
     return worktree_has_unpushed_commits(path)
 
 
+def worker_retained_resource_live(worker):
+    """A retained row holds a seat only while its resource is live: a running terminal,
+    or a worktree on disk with unpushed commits or dirty files. Gone, or clean and pushed, is not a seat."""
+    if worker_liveness_verdict(worker) == 'live':
+        return True
+    path = worker_checkout_path(worker)
+    if not path or not os.path.exists(path):
+        return False
+    if not os.path.isdir(path):
+        return True
+    return worktree_has_unpushed_commits(path) or worktree_disposition(path) != 'clean'
+
+
 def classify_worker(worker, proof=None, config=None, env_names=None):
     """Classifies a worker and determines if it occupies a host slot with evidence.
     Returns: (occupies: bool, classification: dict, has_release_unknown: bool)
@@ -779,9 +792,9 @@ def classify_worker(worker, proof=None, config=None, env_names=None):
             and worker_checkout_path(worker)
             and worker_liveness_verdict(worker)
             and worker_on_local_machine(worker, config, env_names)
-            and not worker_exit_still_holds_seat(worker)
+            and not worker_retained_resource_live(worker)
         ):
-            # Settled local row, no owned resource and nothing unpushed: only a row, not a seat (#1155).
+            # Settled local row whose retained resource is not live and nothing unpushed: only a row, not a seat (#1155).
             info = {
                 'dispatchId': dispatch_id,
                 'host': host,

@@ -1846,6 +1846,36 @@ def heavy_gate_notices(config, state, now, act=None, issue_exists=None):
     return notices, log_bits
 
 
+CHANGELOG_FRAGMENT_WARN = 50
+
+
+def changelog_fragment_notices(config, state, origin_of=None):
+    """One notice per repo whose changelog.d holds more than the limit of uncompiled fragments (#1161).
+
+    It repeats only when the count doubles since the last notice; a count back under the limit resets it.
+    """
+    limit = config.get('changelog_fragment_warn', CHANGELOG_FRAGMENT_WARN)
+    tracked = state.setdefault('changelog_fragments', {})
+    origin_of = origin_of or github_repo_from_origin
+    notices = []
+    for path in iter_repo_root_paths(config.get('repo_roots')):
+        repo = origin_of(path) or path
+        try:
+            count = sum(1 for f in Path(path, 'changelog.d').glob('*.md') if f.name.lower() != 'readme.md')
+        except OSError:
+            continue
+        if count <= limit:
+            tracked.pop(repo, None)
+            continue
+        last = tracked.get(repo)
+        if last and count < 2 * last:
+            continue
+        tracked[repo] = count
+        notices.append('%s: changelog.d holds %d uncompiled fragments (limit %d); compile them before the next deploy' % (
+            repo, count, limit))
+    return notices
+
+
 def wrap_up_notices(config, state, now, stamp_age=None, act=None, issue_exists=None):
     """Open one issue per host when the last wrap-up round line is older than the stale limit."""
     block = config.get('wrap_up') or {}
@@ -6534,6 +6564,7 @@ def main():
     heavy_extra, heavy_log = heavy_gate_notices(config, state, now)
     wrap_extra, wrap_log = wrap_up_notices(config, state, now)
     notices += heavy_extra + wrap_extra
+    notices += changelog_fragment_notices(config, state)
 
     def persist_scan_state():
         save_state(args.state, state)

@@ -647,6 +647,19 @@ def worker_exit_still_holds_seat(worker):
     return worktree_has_unpushed_commits(path)
 
 
+def worker_retained_resource_live(worker):
+    """A retained row holds a seat only while its resource is live: a running terminal,
+    or a worktree on disk with unpushed commits or dirty files. Gone, or clean and pushed, is not a seat."""
+    if worker_liveness_verdict(worker) == 'live':
+        return True
+    path = worker_checkout_path(worker)
+    if not path or not os.path.exists(path):
+        return False
+    if not os.path.isdir(path):
+        return True
+    return worktree_has_unpushed_commits(path) or worktree_disposition(path) != 'clean'
+
+
 def classify_worker(worker, proof=None, config=None, env_names=None):
     """Classifies a worker and determines if it occupies a host slot with evidence.
     Returns: (occupies: bool, classification: dict, has_release_unknown: bool)
@@ -772,6 +785,22 @@ def classify_worker(worker, proof=None, config=None, env_names=None):
                 'category': 'freed',
                 'role': role,
                 'evidence': {'status': status, 'pushed': pushed, 'released': True}
+            }
+            return False, info, False
+        elif (
+            not release_unknown_row(worker)
+            and worker_checkout_path(worker)
+            and worker_liveness_verdict(worker)
+            and worker_on_local_machine(worker, config, env_names)
+            and not worker_retained_resource_live(worker)
+        ):
+            # Settled local row whose retained resource is not live and nothing unpushed: only a row, not a seat (#1155).
+            info = {
+                'dispatchId': dispatch_id,
+                'host': host,
+                'category': 'freed',
+                'role': role,
+                'evidence': {'status': status, 'pushed': pushed, 'released': False, 'no_seat_evidence': True}
             }
             return False, info, False
         else:
@@ -1498,6 +1527,9 @@ def failing(pr):
     return rs.status_rollup_failure_at_head(pr, head)
 
 
+_RECEIPT_LINE_RE = re.compile(r'^(?:Verdict|Review): (?:PASS\+NOTES|PASS|FAIL) head=[0-9a-f]{40}\b')
+
+
 def pr_events(repo, old, prs, now, stuck_seconds):
     """Compare PR data with the last pass. The first pass records and reports nothing."""
     baseline = old is None
@@ -1512,7 +1544,11 @@ def pr_events(repo, old, prs, now, stuck_seconds):
             first = comment['body'].split('\n')[0]
             if (first.startswith('Verdict:') or first.startswith('Review:')) and comment['id'] not in verdicts:
                 verdicts.append(comment['id'])
-                if not baseline:
+                if not baseline and pr['state'] == 'OPEN' and not _RECEIPT_LINE_RE.match(first):
+                    # ship.sh reads only the one line form, so a Verdict in another shape is invisible to it (#1157).
+                    events.append(Urgent('malformed %s on %s #%d: first line %r; repost with script/post-verdict.sh' % (
+                        first.split(':')[0], repo, number, first[:80])))
+                elif not baseline:
                     event = Verdict('%s #%d %s' % (repo, number, first))
                     found = re.search(r'\bauthor=([A-Za-z0-9_-]+)', first)
                     if found:
@@ -1895,6 +1931,36 @@ def stale_board_notices(config, state, now, run=None):
         env, path = key.split('\t', 1)
         notices.append('settled worktree still open on the board: %s on %s (%s); wrap-up board-done has not moved it to Done' % (
             path, env, current[key]))
+    return notices
+
+
+CHANGELOG_FRAGMENT_WARN = 50
+
+
+def changelog_fragment_notices(config, state, origin_of=None):
+    """One notice per repo whose changelog.d holds more than the limit of uncompiled fragments (#1161).
+
+    It repeats only when the count doubles since the last notice; a count back under the limit resets it.
+    """
+    limit = config.get('changelog_fragment_warn', CHANGELOG_FRAGMENT_WARN)
+    tracked = state.setdefault('changelog_fragments', {})
+    origin_of = origin_of or github_repo_from_origin
+    notices = []
+    for path in iter_repo_root_paths(config.get('repo_roots')):
+        repo = origin_of(path) or path
+        try:
+            count = sum(1 for f in Path(path, 'changelog.d').glob('*.md') if f.name.lower() != 'readme.md')
+        except OSError:
+            continue
+        if count <= limit:
+            tracked.pop(repo, None)
+            continue
+        last = tracked.get(repo)
+        if last and count < 2 * last:
+            continue
+        tracked[repo] = count
+        notices.append('%s: changelog.d holds %d uncompiled fragments (limit %d); compile them before the next deploy' % (
+            repo, count, limit))
     return notices
 
 
@@ -6587,6 +6653,7 @@ def main():
     wrap_extra, wrap_log = wrap_up_notices(config, state, now)
     notices += heavy_extra + wrap_extra
     notices += stale_board_notices(config, state, now)
+    notices += changelog_fragment_notices(config, state)
 
     def persist_scan_state():
         save_state(args.state, state)

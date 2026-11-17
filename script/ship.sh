@@ -282,7 +282,19 @@ file_pages=$(gh api --paginate "repos/$repo/pulls/$pr/files") || refuse "cannot 
 # shellcheck disable=SC2034
 files=$(jq -s '[.[][] | (.filename // .path)]' <<<"$file_pages") || refuse "invalid PR $pr file list"
 # shellcheck disable=SC2034
-diff=$(gh pr diff "$pr" --repo "$repo") || refuse "cannot read diff of PR $pr"
+# GitHub refuses a very large diff (PullRequest.diff too_large). Then build the same diff locally from the base and head commits, so every lane check still reads the same content (#1162).
+diff_err=$(mktemp) || refuse "cannot create a temp file"
+if ! diff=$(gh pr diff "$pr" --repo "$repo" 2>"$diff_err"); then
+  if grep -q 'too_large' "$diff_err"; then
+    diff_base=$(field .baseRefOid)
+    [[ "$diff_base" =~ ^[0-9a-f]{40}$ ]] || refuse "PR $pr diff is too large for GitHub and baseRefOid is invalid"
+    git fetch origin "$diff_base" "$head" >&2 || refuse "PR $pr diff is too large for GitHub and the base and head cannot be fetched"
+    diff=$(git diff "$diff_base...$head") || refuse "cannot build the diff of PR $pr locally"
+  else
+    rm -f "$diff_err"; refuse "cannot read diff of PR $pr"
+  fi
+fi
+rm -f "$diff_err"
 
 pr_body=$(field .body)
 # Builder record: one line in the PR body, written by the builder. No Orca lookup.

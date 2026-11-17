@@ -1463,7 +1463,12 @@ def host_deploy_command(target, remote):
     if not printable(remote):
         return None
     joined = " ".join(re.split(r"[ \t]+", remote.strip(" \t")))
-    if re.search(r"[#;&|`$()<>\\'\"{}*?\[\]~]", joined.replace(" && ", " ", 1)):
+    # The one quoted form: git's own receive-pack for a push of the release sha to the app checkout.
+    # The path is plain, and the command must still equal a configured host_deploy_commands entry.
+    scan = joined.replace(" && ", " ", 1)
+    if re.fullmatch(r"git-receive-pack '/[A-Za-z0-9._/-]+'", joined):
+        scan = ""
+    if re.search(r"[#;&|`$()<>\\'\"{}*?\[\]~]", scan):
         return None
     for pat in HOST_DEPLOY_PATTERNS.get(target.lower(), []):
         m = pat.fullmatch(joined)

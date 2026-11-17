@@ -1120,5 +1120,22 @@ name_scope_case 1202 example/repo INTERNAL ship "internal repo PR naming a priva
 name_scope_case 1203 example/repo PUBLIC refuse "public repo PR naming a private project is refused"
 name_scope_case 1204 example/repo fails refuse "unreadable visibility refuses"
 
+# gh pr diff refuses a very large diff (PullRequest.diff too_large): ship.sh builds the diff locally instead (#1162).
+big_case() { # <pr> <gh error text> <expect local|refuse> <label>
+  local n=$1 err=$2 expect=$3 label=$4
+  mf_pr_add "$n" "feat-big-$n" "Body" "script/big-$n.sh"
+  set_checks "$n" "$green_checks"
+  mkdir -p "$MF_DIR/big-$n"
+  printf '#!/usr/bin/env bash\nif [ "$1 $2" = "pr diff" ]; then echo "$BIG_ERR" >&2; exit 1; fi\nexec "%s/gh" "$@"\n' "$MF_BIN" > "$MF_DIR/big-$n/gh"; chmod +x "$MF_DIR/big-$n/gh"
+  : > "$MF_GH_LOG"
+  SHIP_OUT=$(BIG_ERR="$err" PATH="$MF_DIR/big-$n:$PATH" bash "$here/ship.sh" --repo example/repo --pr "$n" --mechanical 2>&1); SHIP_RC=$?
+  # The branch adds a new file, so a --mechanical run that read the local diff refuses with "new file".
+  if [ "$expect" = local ] && [ "$SHIP_RC" -ne 0 ] && grep -Fq "new file" <<<"$SHIP_OUT" && ! grep -Fq "cannot read diff" <<<"$SHIP_OUT"; then ok "$label"
+  elif [ "$expect" = refuse ] && [ "$SHIP_RC" -ne 0 ] && grep -Fq "cannot read diff of PR $n" <<<"$SHIP_OUT"; then ok "$label"
+  else bad "$label" "rc=$SHIP_RC out=$SHIP_OUT"; fi
+}
+big_case 1301 "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (PullRequest.diff too_large)" local "too_large diff falls back to a local git diff"
+big_case 1302 "HTTP 500: server error" refuse "another gh pr diff failure still refuses"
+
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

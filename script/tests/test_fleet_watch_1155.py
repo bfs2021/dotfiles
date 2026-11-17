@@ -61,7 +61,7 @@ class SettledRowsHoldNoSeat(unittest.TestCase):
 
 
 def retained_user_requested_row(i, path='/Users/x/orca/workspaces/repo/gone-%d'):
-    """Live mini6 shape: succeeded, terminal retained by user request, owned resource, not live, worktree gone."""
+    """Live coordinator shape: succeeded, terminal retained by user request, owned resource, not live, worktree gone."""
     path = path % i if '%d' in path else path
     return {
         'dispatchId': 'ctx_ret_%d' % i, 'taskId': 'task_r%d' % i,

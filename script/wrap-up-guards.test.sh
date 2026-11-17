@@ -927,6 +927,22 @@ grep -Fxq 'worktree rm --worktree id:w-gone --force' "$idle/rm.log" || idle_fail
 ! grep -Fq 'delete-branch' "$idle/rm.log" || idle_fail 'a branch was deleted'
 has "Kept idle worktree $idirty (uncommitted changes)" || idle_fail 'the dirty worktree is not named in the report'
 echo 'ok idle worktrees go, a terminal, main and dirty ones stay, and a dry run removes nothing'
+# #1168: a live process with its cwd inside an idle worktree keeps it; an idle one (i-gone) still goes.
+git -C "$idle/repo" worktree add -qb i-busy "$idle/i-busy"
+echo busy > "$idle/i-busy/busy.txt"; git -C "$idle/i-busy" add busy.txt; git -C "$idle/i-busy" commit -qm busy
+git -C "$idle/i-busy" push -q origin i-busy:i-busy-copy
+git -C "$idle/repo" worktree lock "$idle/i-busy"
+ibusy=$(cd "$idle/i-busy" && pwd -P)
+printf '{"ok":true,"result":{"worktrees":[{"id":"w-main","path":"%s","isMainWorktree":true},{"id":"w-gone","path":"%s"},{"id":"w-busy","path":"%s"}]}}\n' "$irepo" "$igone" "$ibusy" > "$idle/wts.json"
+(cd "$ibusy" && exec sleep 120) & busy_pid=$!
+sleep 1
+: > "$idle/rm.log"
+bash "$here/wrap-up.sh" --apply --worktrees-only --repo "$irepo" > "$tmp/output" 2> "$tmp/stderr" || true
+kill "$busy_pid" 2>/dev/null; wait "$busy_pid" 2>/dev/null || true
+grep -Fxq 'worktree rm --worktree id:w-gone --force' "$idle/rm.log" || idle_fail 'the idle worktree was not removed beside a busy one'
+! grep -Fq 'id:w-busy' "$idle/rm.log" || idle_fail 'a worktree with a live process cwd was removed'
+has "Kept idle worktree $ibusy (held open by a running process)" || idle_fail 'the busy worktree skip was not logged'
+echo 'ok a live process cwd keeps an idle worktree, an idle one still goes'
 # One host failing must not stop the next.
 printf '{"hosts":[{"host":"down","repo_dir":"%s"},{"host":"alpha","repo_dir":"%s"}]}\n' "$irepo" "$irepo" > "$tmp/fleet.json"
 : > "$idle/rm.log"; : > "$FAKE_SSH_LOG"

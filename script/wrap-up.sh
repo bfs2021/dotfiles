@@ -2157,6 +2157,8 @@ sweep_idle_worktrees() {
       fi
       # #1083: an open PR and commits no remote holds (the last copy) keep it, however idle.
       if idle_worktree_guard "$path"; then continue; fi
+      # #1168: a process with its cwd or an open file here (a sibling's `bun test`) keeps it, whatever Orca terminals say.
+      if in_use "$path"; then printf 'Kept idle worktree %s (%s)\n' "$path" "$busy"; continue; fi
     fi
     if [ "$apply" -eq 0 ]; then printf 'Remove idle worktree %s\n' "$path"; gone=$((gone+1)); continue; fi
     if guarded_idle_worktree_rm "$id" "$path"; then gone=$((gone+1)); fi

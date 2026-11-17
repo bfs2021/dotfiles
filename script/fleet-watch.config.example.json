@@ -20,6 +20,7 @@
       "release-host": "release"
     }
   },
+  "board_stale_check": false,
   "leads": [],
   "pr_watch": {
     "repos": ["mingster/dotfiles", "mingster/project-a"],

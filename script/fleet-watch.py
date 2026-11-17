@@ -1882,6 +1882,58 @@ def heavy_gate_notices(config, state, now, act=None, issue_exists=None):
     return notices, log_bits
 
 
+BOARD_STALE_CHECK_SECONDS = 3600
+BOARD_STALE_NOTICES_PER_PASS = 5
+_BOARD_WOULD_SET_RE = re.compile(r'^\[dry-run\] would set (?P<path>.+) completed \((?P<why>[^)]*)\) environment=(?P<env>\S+)$')
+
+
+def board_dry_run_output():
+    """Text of `board-done.py --fleet` in its default dry run, or None when it fails."""
+    script = Path(__file__).with_name('board-done.py')
+    try:
+        proc = subprocess.run([sys.executable, str(script), '--fleet'], capture_output=True, text=True, timeout=110, check=False)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def stale_board_notices(config, state, now, run=None):
+    """Report a worktree whose card board-done would move to Done but that still sits there an hour later (#1160).
+
+    Opt in with board_stale_check in the private config. The check runs at most once an hour (board_stale_check_seconds). A card is first seen, then reported once
+    when a later check still finds it. At most five are reported per pass.
+    """
+    if not config.get('board_stale_check'):
+        return []
+    block = state.setdefault('board_stale', {'checked_at': None, 'seen': {}, 'reported': []})
+    interval = config.get('board_stale_check_seconds', BOARD_STALE_CHECK_SECONDS)
+    if block['checked_at'] is not None and now - block['checked_at'] < interval:
+        return []
+    text = (run or board_dry_run_output)()
+    if text is None:
+        return []
+    block['checked_at'] = now
+    current = {}
+    for line in text.splitlines():
+        found = _BOARD_WOULD_SET_RE.match(line.strip())
+        if found:
+            current['%s\t%s' % (found.group('env'), found.group('path'))] = found.group('why')
+    seen = {key: block['seen'].get(key, now) for key in current}
+    block['seen'] = seen
+    block['reported'] = [key for key in block['reported'] if key in current]
+    notices = []
+    for key, first in sorted(seen.items(), key=lambda item: item[1]):
+        if key in block['reported'] or now - first < interval:
+            continue
+        if len(notices) == BOARD_STALE_NOTICES_PER_PASS:
+            break
+        block['reported'].append(key)
+        env, path = key.split('\t', 1)
+        notices.append('settled worktree still open on the board: %s on %s (%s); wrap-up board-done has not moved it to Done' % (
+            path, env, current[key]))
+    return notices
+
+
 CHANGELOG_FRAGMENT_WARN = 50
 
 
@@ -6600,6 +6652,7 @@ def main():
     heavy_extra, heavy_log = heavy_gate_notices(config, state, now)
     wrap_extra, wrap_log = wrap_up_notices(config, state, now)
     notices += heavy_extra + wrap_extra
+    notices += stale_board_notices(config, state, now)
     notices += changelog_fragment_notices(config, state)
 
     def persist_scan_state():

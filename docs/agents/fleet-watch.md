@@ -18,6 +18,8 @@ Open PRs in each repo from `repo_roots` are watched for merges, Verdicts, Review
 
 `heavy_gate.hosts` maps a host id to its wait log. The pass reads `wait_s=` lines from the last 24 hours (`HEAVY_GATE_WAIT_MEDIAN_MAX_AGE_SECONDS`), logs `heavy_gate_median_<host>=<seconds>`, and opens at most one open issue in `mingster/agent-state` titled `heavy-gate median wait exceeds 2 minutes on <host>` when the median exceeds two minutes.
 
+With `board_stale_check` set to true in the private config, a pass runs the `board-done.py --fleet` dry run at most once an hour (`board_stale_check_seconds`). A card it would move to Done that is still listed an hour later gets one notice (at most five per pass): a settled dispatch whose worktree still shows in-progress or in-review (#1160). A failed dry run changes nothing and is tried again later.
+
 Each pass counts the `.md` files in `changelog.d/` (README excluded) in every `repo_roots` checkout and sends one notice when a repo holds more than 50 (config key `changelog_fragment_warn`). It repeats only when the count doubles, and a count back under the limit resets it (#1161). Compile the fragments before the next deploy.
 
 `wrap_up.hosts` maps a host id to its `wrap-up-scheduled.log`. The pass reads the last timestamp, logs `wrap_up_age_<host>=<seconds>` (and `wrap_up_stale_<host>` past 10 minutes), and opens at most one open issue in `mingster/agent-state` titled `wrap-up last round stale on <host>` when older than 20 minutes.

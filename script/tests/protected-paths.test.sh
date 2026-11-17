@@ -136,6 +136,25 @@ printf 'touch path\n' > "$tmp/msg"
 commit_path docs/intent/example.md
 expect_refuse "an accepted intent with no trailer is refused" "$(git -C "$repo" rev-parse HEAD)" docs/intent/example.md "$intent_diff" "$intent_needle"
 
+# Issue #1176: role-file gates match the file name only, not any suffix.
+# .claude/model-routing.md, templates/.../model-routing.md and web/AGENTS.md stay gated.
+for role_path in .claude/model-routing.md templates/agent-team/.claude/model-routing.md web/AGENTS.md; do
+  reset_branch
+  printf 'touch path\n' > "$tmp/msg"
+  commit_path "$role_path"
+  expect_refuse "$role_path is gated with no trailer" "$(git -C "$repo" rev-parse HEAD)" "$role_path" "" "$owner_needle"
+done
+# But a changelog.d fragment whose name merely ends in model-routing.md is not gated.
+reset_branch
+printf 'touch path\n' > "$tmp/msg"
+commit_path changelog.d/mattpocock-sync-model-routing.md
+expect_allow "changelog.d model-routing fragment is not gated" "$(git -C "$repo" rev-parse HEAD)" changelog.d/mattpocock-sync-model-routing.md ""
+# Nor is a changelog.d AGENTS.md fragment.
+reset_branch
+printf 'touch path\n' > "$tmp/msg"
+commit_path changelog.d/sync-AGENTS.md
+expect_allow "changelog.d AGENTS.md fragment is not gated" "$(git -C "$repo" rev-parse HEAD)" changelog.d/sync-AGENTS.md ""
+
 # Unfetched PR head (under refs/pull/<pr>/head on origin) and unfetched base (on origin/main) are fetched before checking receipts.
 remote=$tmp/remote.git
 git init -q --bare "$remote"

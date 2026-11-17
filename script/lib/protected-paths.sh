@@ -80,8 +80,10 @@ text_lane_role_path() { # <path>
     docs/agents/elon-dispatch.md|docs/agents/team.md) return 0 ;;
   esac
   [[ "$1" == */.claude/agents/* || "$1" == .claude/agents/* ]] && return 0
-  [[ "$1" == *AGENTS.md ]] && return 0
-  [[ "$1" == *model-routing.md ]] && return 0
+  # Match the file name only: a changelog.d fragment like
+  # "mattpocock-sync-model-routing.md" must not count as a protected role file.
+  [[ "${1##*/}" == AGENTS.md ]] && return 0
+  [[ "${1##*/}" == model-routing.md ]] && return 0
   return 1
 }
 

@@ -1,0 +1,1 @@
+worker-startup adds an "If worker_done is rejected" note to every remote worker brief: on `unknown dispatch` the worker leaves the PR open and stops instead of retrying, since the dispatch lives on the coordinator server. The cause is recorded in orca-gaps.md as unconfirmed on a live remote worker. A test covers the remote and local briefs.

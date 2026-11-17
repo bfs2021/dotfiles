@@ -91,7 +91,8 @@ fleet_pull_after_merge() { # <pr> <merge sha>
     tmp=$(mktemp) || exit 0
     bash "$cmd" >"$tmp" 2>&1 &
     pid=$!
-    ( sleep "$limit"; pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    # Take the children first: killing only a child lets fleet-pull carry on to the next host.
+    ( sleep "$limit"; kids=$(pgrep -P "$pid" 2>/dev/null || true); kill "$pid" $kids 2>/dev/null ) >/dev/null 2>&1 &
     dog=$!
     rc=0
     wait "$pid" || rc=$?

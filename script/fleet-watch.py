@@ -774,8 +774,14 @@ def classify_worker(worker, proof=None, config=None, env_names=None):
                 'evidence': {'status': status, 'pushed': pushed, 'released': True}
             }
             return False, info, False
-        elif not worker_exit_still_holds_seat(worker):
-            # Settled with no owned resource and nothing unpushed: only a row, not a seat (#1155).
+        elif (
+            not release_unknown_row(worker)
+            and worker_checkout_path(worker)
+            and worker_liveness_verdict(worker)
+            and worker_on_local_machine(worker, config, env_names)
+            and not worker_exit_still_holds_seat(worker)
+        ):
+            # Settled local row, no owned resource and nothing unpushed: only a row, not a seat (#1155).
             info = {
                 'dispatchId': dispatch_id,
                 'host': host,

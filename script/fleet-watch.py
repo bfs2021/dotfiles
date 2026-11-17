@@ -1498,6 +1498,9 @@ def failing(pr):
     return rs.status_rollup_failure_at_head(pr, head)
 
 
+_RECEIPT_LINE_RE = re.compile(r'^(?:Verdict|Review): (?:PASS\+NOTES|PASS|FAIL) head=[0-9a-f]{40}\b')
+
+
 def pr_events(repo, old, prs, now, stuck_seconds):
     """Compare PR data with the last pass. The first pass records and reports nothing."""
     baseline = old is None
@@ -1512,7 +1515,11 @@ def pr_events(repo, old, prs, now, stuck_seconds):
             first = comment['body'].split('\n')[0]
             if (first.startswith('Verdict:') or first.startswith('Review:')) and comment['id'] not in verdicts:
                 verdicts.append(comment['id'])
-                if not baseline:
+                if not baseline and pr['state'] == 'OPEN' and not _RECEIPT_LINE_RE.match(first):
+                    # ship.sh reads only the one line form, so a Verdict in another shape is invisible to it (#1157).
+                    events.append(Urgent('malformed %s on %s #%d: first line %r; repost with script/post-verdict.sh' % (
+                        first.split(':')[0], repo, number, first[:80])))
+                elif not baseline:
                     event = Verdict('%s #%d %s' % (repo, number, first))
                     found = re.search(r'\bauthor=([A-Za-z0-9_-]+)', first)
                     if found:

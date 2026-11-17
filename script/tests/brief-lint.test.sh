@@ -326,7 +326,7 @@ Refs dotfiles#1026
 Type: verify
 
 ## Acceptance
-- [ ] A Verdict is posted for the head.
+- [ ] A Verdict is posted for the head with script/post-verdict.sh.
 
 ## Out of scope
 Merging.
@@ -335,6 +335,12 @@ Merging.
 Run bash script/checks-local.sh.
 EOF
 lint_exact "Type verify passes" "$tmp/type-verify.md" 0 ""
+
+sed 's#with script/post-verdict.sh#as a comment#' "$tmp/type-verify.md" >"$tmp/type-verify-nofmt.md"
+lint_exact "Type verify without the Verdict format is refused" "$tmp/type-verify-nofmt.md" 1 "brief-lint: verify brief must name script/post-verdict.sh or the exact Verdict first line"
+
+sed 's#as a comment#as a comment whose first line is Verdict: PASS head=<40 hex> verifier=<id> author=<id>#' "$tmp/type-verify-nofmt.md" >"$tmp/type-verify-line.md"
+lint_exact "Type verify with the exact first line passes" "$tmp/type-verify-line.md" 0 ""
 
 cat >"$tmp/type-unknown.md" <<'EOF'
 Refs dotfiles#1026

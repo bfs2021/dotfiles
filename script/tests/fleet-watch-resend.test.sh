@@ -251,7 +251,7 @@ class Digest(unittest.TestCase):
         watch.deliver_notices(UNTYPED, state, ['n1'], rpc, now=0, owner_of=NO_OWNER)
         calls.clear()
         verdict, _ = watch.pr_events('o/r', {}, [{'number': 7, 'state': 'OPEN', 'headRefOid': 'h', 'statusCheckRollup': [],
-            'comments': [{'id': 'c1', 'body': 'Verdict: PASS head=h verifier=v1 author=ctx_a1\nfine'}]}], 0, 99)
+            'comments': [{'id': 'c1', 'body': 'Verdict: PASS head=' + 'a' * 40 + ' verifier=v1 author=ctx_a1\nfine'}]}], 0, 99)
         self.assertEqual(len(verdict), 1)
         self.assertIsInstance(verdict[0], watch.Verdict)
         watch.deliver_notices(UNTYPED, state, verdict, rpc, now=5, owner_of=lambda a: 'term_lead' if a == 'ctx_a1' else None)

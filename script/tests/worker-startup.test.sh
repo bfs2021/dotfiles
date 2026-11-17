@@ -1358,14 +1358,18 @@ printf 'Refs acme/app#7880\n\n# fullstack-dev - issue 7880\n\n%s\n' "$spec_saved
 : >"$GH_STUB_LOG"
 PICK_STUB_MODE=sonnet route_run "fullstack-dev - issue 7880" claude claude-sonnet-5-5-medium
 [ "$route_ec" -ne 0 ] && ok || bad "an issue closed by merged PRs should be refused (ec=$route_ec)"
-grep -q 'already delivered by merged PR #8280, #8288' "$tmp/route.err" && ok || bad "refusal should name only the closing PRs ($(cat "$tmp/route.err"))"
-grep -q '#8349\|#9' "$tmp/route.err" && bad "a Refs only PR or a longer number must not count" || ok
+grep -q 'already delivered by merged PR #8280, #8288, #8349' "$tmp/route.err" && ok || bad "refusal should name only the closing PRs ($(cat "$tmp/route.err"))"
+grep -q '#9\b' "$tmp/route.err" && bad "a longer number must not count" || ok
 grep -q 'worker-start' "$tmp/orca-route.log" && bad "refused delivered issue must not reach worker-start" || ok
 PICK_STUB_MODE=sonnet route_run "fullstack-dev - issue 7880" claude claude-sonnet-5-5-medium --allow-delivered "follow-up slice"
 [ "$route_ec" = 0 ] && ok || bad "--allow-delivered should start anyway (ec=$route_ec) $(cat "$tmp/route.err")"
 grep -q 'allow-delivered.*follow-up slice' "$tmp/route.err" && ok || bad "the override reason should be logged ($(cat "$tmp/route.err"))"
 GH_STUB_FAIL=1 PICK_STUB_MODE=sonnet route_run "fullstack-dev - issue 7880" claude claude-sonnet-5-5-medium
 [ "$route_ec" = 0 ] && ok || bad "a failed gh call must not block the start (ec=$route_ec) $(cat "$tmp/route.err")"
+# fleet-watch issue scan default title "builder - #<n>" is a builder too.
+printf 'Refs acme/app#7880\n\n# builder - #7880\n\n%s\n' "$spec_saved" >"$spec_file"
+PICK_STUB_MODE=sonnet route_run "builder - #7880" claude claude-sonnet-5-5-medium
+[ "$route_ec" -ne 0 ] && ok || bad "the scan default builder title should be refused (ec=$route_ec)"
 printf 'Refs acme/app#7881\n\n# fullstack-dev - issue 7881\n\n%s\n' "$spec_saved" >"$spec_file"
 PICK_STUB_MODE=sonnet route_run "fullstack-dev - issue 7881" claude claude-sonnet-5-5-medium
 [ "$route_ec" = 0 ] && ok || bad "an issue no merged PR closed should start (ec=$route_ec) $(cat "$tmp/route.err")"

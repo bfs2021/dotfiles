@@ -454,7 +454,7 @@ spec = importlib.util.spec_from_file_location("usage_gate_route", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 try:
-    builder = mod.is_builder_role(sys.argv[2])
+    builder = sys.argv[2] == "builder" or mod.is_builder_role(sys.argv[2])
 except Exception as exc:
     print("worker-startup: cannot classify role:", type(exc).__name__, file=sys.stderr)
     sys.exit(2)
@@ -520,7 +520,7 @@ refuse_merged_backlog_line() { # <spec_file> <title>
   [ -z "$merged" ] || die "refused: $key already merged in PR #$merged; check the backlog before building it again"
 }
 
-# A builder brief whose Refs issue a merged PR already closed is refused (#1158). A failed gh call lets the start go on.
+# A builder brief whose Refs issue a merged PR already closed or referenced is refused (#1158). A failed gh call lets the start go on.
 refuse_delivered_issue() { # <spec_file> <title> <allow_reason>
   local spec_file=$1 title=$2 allow=$3 role kind ref repo num prs btype
   role=$(role_from_title "$title")
@@ -535,7 +535,7 @@ refuse_delivered_issue() { # <spec_file> <title> <allow_reason>
   repo=${ref%%#*}
   command -v gh >/dev/null 2>&1 || return 0
   prs=$(gh pr list ${repo:+-R "$repo"} --state merged --search "$num in:body" --limit 30 --json number,body \
-    --jq "[.[] | select(.body // \"\" | test(\"(?i)(closes|fixes|resolves|delivers)\\\\s+([A-Za-z0-9_./-]+)?#$num\\\\b\")) | .number] | map(\"#\" + tostring) | join(\", \")" 2>/dev/null) || {
+    --jq "[.[] | select(.body // \"\" | test(\"(?i)(closes|fixes|resolves|delivers|refs)\\\\s+([A-Za-z0-9_./-]+)?#$num\\\\b\")) | .number] | map(\"#\" + tostring) | join(\", \")" 2>/dev/null) || {
     echo "worker-startup: delivered-issue check skipped: gh failed" >&2
     return 0
   }

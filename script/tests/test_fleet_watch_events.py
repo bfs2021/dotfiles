@@ -53,6 +53,24 @@ class PrEvents(unittest.TestCase):
         events, state = self.diff(state, prs)
         self.assertEqual(events, ['mingster/dotfiles #7 ' + line])
 
+    def test_malformed_verdict_on_open_pr_is_flagged_once(self):
+        _, state = self.diff(None, [pr()])
+        bad = 'Verdict: PASS\nHead SHA: ' + HEAD
+        prs = [pr(comments=[comment('v1', bad)])]
+        events, state = self.diff(state, prs)
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0], fw.Urgent)
+        self.assertNotIsInstance(events[0], fw.Verdict)
+        self.assertIn('malformed Verdict on mingster/dotfiles #7', events[0])
+        self.assertIn('post-verdict.sh', events[0])
+        self.assertEqual(self.diff(state, prs)[0], [])
+
+    def test_malformed_verdict_on_merged_pr_is_not_flagged(self):
+        _, state = self.diff(None, [pr()])
+        prs = [pr(state='MERGED', merge='c' * 40, comments=[comment('v1', 'Verdict: PASS')])]
+        events, _ = self.diff(state, prs)
+        self.assertFalse([e for e in events if str(e).startswith('malformed')])
+
     def test_failing_pr_is_stuck_once_after_the_limit(self):
         prs = [pr(comments=[comment('k1', 'Checks: FAIL head=' + HEAD)])]
         _, state = self.diff(None, prs, 0)

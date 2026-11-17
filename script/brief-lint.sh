@@ -4,7 +4,8 @@
 # An optional "Type:" line is build (the default when the line is absent), rework, verify, or
 # rule/guide change (also "rule/guide"). A rule/guide brief names one rg, grep, or git grep
 # command, in backticks or alone on a line under Acceptance or Verify, for the builder and the
-# verifier. A command under Out of scope does not count. A rework brief links the Verdict
+# verifier. A command under Out of scope does not count. A verify brief names script/post-verdict.sh
+# or the exact first line (Verdict: PASS|PASS+NOTES|FAIL head=<40 hex> ...), since ship.sh parses only that (#1157). A rework brief links the Verdict
 # (a comment URL plus the word Verdict) and has a Self-check acceptance item.
 # Usage: brief-lint.sh <file>
 set -euo pipefail
@@ -51,6 +52,7 @@ function harvest_searches(line,    rest, chunk, bare) {
   }
   if ($0 ~ /https?:\/\/[^[:space:]]*#issuecomment-[0-9]+/) has_verdict_url = 1
   if (index($0, "Verdict") > 0) has_verdict_word = 1
+  if ($0 ~ /post-verdict\.sh/ || $0 ~ /Verdict: (PASS|FAIL)[^[:space:]]* head=/) has_verdict_format = 1
 }
 /^Type:/ {
   type_count++
@@ -117,6 +119,8 @@ END {
     print "brief-lint: brief has more than one Type"; rc = 1
   } else if (type_count == 1 && brief_type != "build" && brief_type != "rework" && brief_type != "verify" && brief_type != "rule/guide" && brief_type != "rule/guide change") {
     print "brief-lint: unknown brief type"; rc = 1
+  } else if (brief_type == "verify") {
+    if (!has_verdict_format) { print "brief-lint: verify brief must name script/post-verdict.sh or the exact Verdict first line"; rc = 1 }
   } else if (brief_type == "rework") {
     if (!(has_verdict_url && has_verdict_word)) { print "brief-lint: rework brief must link the Verdict"; rc = 1 }
     if (!has_self_check) { print "brief-lint: rework brief must require a Self-check"; rc = 1 }
